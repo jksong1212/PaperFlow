@@ -1,4 +1,43 @@
+from html.parser import HTMLParser
+
 import requests
+
+
+class _AbstractTextParser(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts = []
+
+    def _break(self):
+        if self.parts and self.parts[-1] != "\n":
+            self.parts.append("\n")
+
+    def handle_starttag(self, tag, attrs):
+        if tag.rsplit(":", 1)[-1] in {"sec", "title", "p", "list-item", "br"}:
+            self._break()
+
+    def handle_endtag(self, tag):
+        if tag.rsplit(":", 1)[-1] in {"sec", "title", "p", "list-item"}:
+            self._break()
+
+    def handle_data(self, data):
+        self.parts.append(data)
+
+
+def plain_abstract(value):
+    """Turn a Crossref JATS abstract into readable section and paragraph text."""
+    if not value:
+        return ""
+    if "<" not in value and "&" not in value:
+        return value.strip()
+    parser = _AbstractTextParser()
+    parser.feed(value)
+    parser.close()
+    return "\n\n".join(
+        line for part in "".join(parser.parts).splitlines()
+        if (line := " ".join(part.split()))
+    )
+
 
 def crossref_by_doi(doi):
     if not doi:
@@ -25,7 +64,7 @@ def crossref_by_doi(doi):
             "issue": m.get("issue",""),
             "pages": m.get("page",""),
             "doi": m.get("DOI", doi),
-            "abstract": m.get("abstract","") or ""
+            "abstract": plain_abstract(m.get("abstract", ""))
         }
-    except Exception:
+    except Exception:  # noqa: BLE001 - remote metadata is optional
         return {}

@@ -1,43 +1,67 @@
-import os, sys, subprocess
+import sys
 from pathlib import Path
-from PySide6.QtCore import Qt, QThread, Signal, QTimer
+
+from PySide6.QtCore import Qt, QThread, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtCore import QUrl
 from PySide6.QtWidgets import (
- QApplication,QMainWindow,QWidget,QVBoxLayout,QHBoxLayout,QPushButton,QLineEdit,
- QFileDialog,QTableWidget,QTableWidgetItem,QSplitter,QLabel,QTextEdit,QTabWidget,
- QComboBox,QMessageBox,QHeaderView,QProgressBar,QCheckBox
+    QApplication,
+    QCheckBox,
+    QComboBox,
+    QFileDialog,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QLineEdit,
+    QMainWindow,
+    QMessageBox,
+    QProgressBar,
+    QPushButton,
+    QSplitter,
+    QTableWidget,
+    QTableWidgetItem,
+    QTabWidget,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
 )
-from .db import list_papers, upsert_paper, update_text
-from .pdf import extract_pdf
-from .metadata import crossref_by_doi
-from .citation import format_references, available_styles
+
 from .ai import build_prompt, open_ai
+from .citation import available_styles, format_references
+from .db import list_papers, update_text, upsert_paper
+from .metadata import crossref_by_doi, plain_abstract
+from .pdf import extract_pdf
+
 
 class ScanWorker(QThread):
     progress = Signal(int,int,str)
+    error = Signal(str)
     done = Signal()
     def __init__(self, folder):
         super().__init__(); self.folder=folder
     def run(self):
-        paths=list(Path(self.folder).rglob("*.pdf"))
-        for i,p in enumerate(paths,1):
-            data=extract_pdf(p)
-            if data.get("doi"):
-                remote=crossref_by_doi(data["doi"])
-                for k,v in remote.items():
-                    if v: data[k]=v
-            upsert_paper(data)
-            self.progress.emit(i,len(paths),p.name)
-        self.done.emit()
+        try:
+            paths=list(Path(self.folder).rglob("*.pdf"))
+            for i,p in enumerate(paths,1):
+                data=extract_pdf(p)
+                if data.get("doi"):
+                    remote=crossref_by_doi(data["doi"])
+                    for k,v in remote.items():
+                        if v: data[k]=v
+                upsert_paper(data)
+                self.progress.emit(i,len(paths),p.name)
+        except Exception as exc:  # noqa: BLE001 - report worker failures to the GUI
+            self.error.emit(str(exc))
+        finally:
+            self.done.emit()
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("PaperFlow v0.1")
+        self.setWindowTitle("PaperFlow v0.3")
         self.resize(1400,850)
         self.rows=[]
         self.current_id=None
+        self.current_paper=None
         self._build()
         self.reload()
 
@@ -139,15 +163,24 @@ class MainWindow(QMainWindow):
             self.table.setItem(r,0,c)
             vals=[p["title"],p["authors"],p["year"],p["journal"],p["doi"],p["filename"]]
             for j,v in enumerate(vals,1): self.table.setItem(r,j,QTableWidgetItem(v or ""))
+        if self.current_id is not None:
+            self.current_paper = next(
+                (p for p in self.rows if p["id"] == self.current_id), self.current_paper
+            )
 
     def choose_folder(self):
         folder=QFileDialog.getExistingDirectory(self,"Choose paper folder")
         if not folder:return
         self.folder_btn.setEnabled(False); self.progress.show(); self.progress.setValue(0)
+        self.scan_error = None
         self.worker=ScanWorker(folder)
         self.worker.progress.connect(self.scan_progress)
+        self.worker.error.connect(self.scan_failed)
         self.worker.done.connect(self.scan_done)
         self.worker.start()
+
+    def scan_failed(self, message):
+        self.scan_error = message
 
     def scan_progress(self,i,n,name):
         self.progress.setMaximum(max(n,1)); self.progress.setValue(i)
@@ -155,13 +188,16 @@ class MainWindow(QMainWindow):
 
     def scan_done(self):
         self.folder_btn.setEnabled(True); self.progress.hide(); self.reload()
-        QMessageBox.information(self,"PaperFlow","Folder indexing finished.")
+        if self.scan_error:
+            QMessageBox.warning(self,"PaperFlow",f"Folder indexing stopped: {self.scan_error}")
+        else:
+            QMessageBox.information(self,"PaperFlow","Folder indexing finished.")
 
     def select_row(self,r,c):
         p=self.rows[r]; self.current_paper=p; self.current_id=p["id"]; self.current_path=p["filepath"]
         self.title.setText(p["title"] or p["filename"])
         self.meta.setText(f'{p["authors"]}\n{p["journal"]} · {p["year"]} · DOI: {p["doi"]}')
-        self.abstract.setPlainText(p["abstract"] or "")
+        self.abstract.setPlainText(plain_abstract(p["abstract"]))
         self.summary.setPlainText(p["summary"] or "")
         self.notes.setPlainText(p["notes"] or "")
 
@@ -218,8 +254,8 @@ class MainWindow(QMainWindow):
         chosen=[p for p in self.rows if p["id"] in ids]
         try:
             rendered=format_references(chosen,self.style.currentText())
-            self.refs.setPlainText("\n\n".join(f"{i}. {ref}" for i,ref in enumerate(rendered,1)))
-        except Exception as e:
+            self.refs.setPlainText("\n\n".join(rendered))
+        except Exception as e:  # noqa: BLE001 - show citation errors in the GUI
             QMessageBox.critical(self,"Citation error",f"Could not render CSL references:\n{e}")
 
 def run():

@@ -1,6 +1,10 @@
-import re, webbrowser
+import re
+import webbrowser
 from collections import Counter
-import fitz
+
+import pymupdf
+
+from .metadata import plain_abstract
 
 AI_URLS = {
     "ChatGPT": "https://chatgpt.com/",
@@ -12,7 +16,7 @@ STOP = {"the","and","for","with","from","this","that","what","why","how","paper"
 
 def _pdf_text(path, max_chars=100000):
     try:
-        doc=fitz.open(path); out=[]; n=0
+        doc=pymupdf.open(path); out=[]; n=0
         for i,page in enumerate(doc):
             t=page.get_text("text").strip()
             if t:
@@ -20,8 +24,8 @@ def _pdf_text(path, max_chars=100000):
             if n>=max_chars: break
         doc.close()
         return "".join(out)[:max_chars]
-    except Exception as e:
-        return f"[PDF extraction failed: {e}]"
+    except Exception:  # noqa: BLE001 - optional PDF context must not block a prompt
+        return ""
 
 def _excerpt(text, question, max_chars=16000):
     keys=[w for w,_ in Counter(re.findall(r"[A-Za-z][A-Za-z0-9_-]{2,}|[가-힣]{2,}",
@@ -40,14 +44,14 @@ def _excerpt(text, question, max_chars=16000):
 
 def build_prompt(p, question, metadata=True, abstract=True, pdf=True, notes=False):
     x=["You are helping me analyze a scientific paper.",
-       "Use only the supplied paper context for factual claims about this paper. "
-       "Distinguish the paper's claims from your interpretation. If context is insufficient, say so.",
+       ("Use only the supplied paper context for factual claims about this paper. "
+        "Distinguish the paper's claims from your interpretation. If context is insufficient, say so."),
        f"\nQUESTION:\n{question.strip()}"]
     if metadata:
         x += ["\nPAPER METADATA:",
               f"Title: {p['title']}", f"Authors: {p['authors']}",
               f"Journal: {p['journal']}", f"Year: {p['year']}", f"DOI: {p['doi']}"]
-    if abstract and p["abstract"]: x += ["\nABSTRACT:", p["abstract"]]
+    if abstract and p["abstract"]: x += ["\nABSTRACT:", plain_abstract(p["abstract"])]
     if notes and p["notes"]: x += ["\nMY NOTES:", p["notes"]]
     if pdf:
         ex=_excerpt(_pdf_text(p["filepath"]), question)

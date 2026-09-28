@@ -1,4 +1,4 @@
-POPULAR_STYLES={"APA 7th":"apa","Vancouver":"vancouver","Nature":"nature","IEEE":"ieee","AMA":"american-medical-association","Cell":"cell","Science":"science","The Lancet":"the-lancet","European Heart Journal":"european-heart-journal","Circulation":"circulation"}
+POPULAR_STYLES={"APA 7th":"apa","Vancouver":"springer-vancouver","Nature":"nature","IEEE":"ieee","AMA":"american-medical-association","Cell":"cell","Science":"science","The Lancet":"the-lancet","European Heart Journal":"european-heart-journal","Circulation":"circulation"}
 
 def available_styles(): return list(POPULAR_STYLES)
 
@@ -22,7 +22,13 @@ def _item(p):
     return d
 
 def format_references(papers,display_style):
-    from citeproc import Citation,CitationItem,CitationStylesBibliography,CitationStylesStyle,formatter
+    from citeproc import (
+        Citation,
+        CitationItem,
+        CitationStylesBibliography,
+        CitationStylesStyle,
+        formatter,
+    )
     from citeproc.source.json import CiteProcJSON
     from citeproc_styles import get_style_filepath
     source=CiteProcJSON([_item(p) for p in papers])
